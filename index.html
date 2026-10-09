@@ -145,7 +145,7 @@ body.night .logo{filter:brightness(1.45) saturate(1.2)}
 #qr.gone{opacity:0;transform:scale(.92);pointer-events:none}
 .qc{width:100%;height:100%;box-sizing:border-box;border-radius:20px;background:rgba(255,255,255,.92);border:1px solid #fff;box-shadow:0 8px 28px rgba(60,60,100,.14);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#303030;padding:10px}
 .qc b{font-size:17px;font-weight:700;line-height:20px}.qc span{font-size:13px;line-height:16px;opacity:.7}.qc img{width:184px;height:184px;margin-top:4px;display:block}
-#stage.narrow #qr{top:330px}
+#stage.narrow #qr{top:318px}
 #stage.narrow #hTitle{width:var(--tw)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* booking */
 .lab{left:85px;font-size:19px}
@@ -274,7 +274,7 @@ body.night .logo{filter:brightness(1.45) saturate(1.2)}
 <script>
 /* ===== კონფიგურაცია ===== */
 const ROOMS = {   // TODO: დანარჩენი 3 ოთახის სახელი / ფერი / მეილი (არჩევა: index.html?room=room2)
-  gulisqari: {name: 'გულისკარი', email: 'gulisqari@company.com', color: '#FA6E5F'},
+  gulisqari: {name: 'გულისკარი', email: 'guliskari@ip13.onmicrosoft.com', color: '#FA6E5F'},
   room2: {name: 'ოთახი 2', email: 'room2@company.com', color: '#FA6E5F'},
   room3: {name: 'ოთახი 3', email: 'room3@company.com', color: '#FA6E5F'},
   room4: {name: 'ოთახი 4', email: 'room4@company.com', color: '#FA6E5F'}
@@ -284,7 +284,7 @@ const CONFIG = {
   source: 'mock',                       // 'mock' | 'graph'
   apiBase: '/api',                      // თქვენი ბექენდ-პროქსი Outlook-ისთვის
   room: ROOM.email,                     // OUTLOOK: ოთახის mailbox
-  itEmail: 'it@company.com',            // IT მოთხოვნების მისამართი
+  itEmail: 'clinics_it_support@evex.ge', canFuture: true, itWebhook: '',            // IT მოთხოვნების მისამართი
   tz: 'Asia/Tbilisi',
   refreshSec: 60
 };
@@ -300,8 +300,21 @@ const mockEvents = (() => {
     author: 'სახელი გვარი', kind: 'Teams Meeting / Room Meeting'
   }));
 })();
+const EVX = {   // Meeting Room 365-თან ხიდი: მშობელი გვერდი კითხულობს მის კალენდარს და გვიგზავნის postMessage-ით
+  evs: [], local: [], pending: {},
+  events() { const now = Date.now(); this.local = this.local.filter(l => l.until > now); return this.evs.concat(this.local.filter(l => !this.evs.some(r => Math.abs(r.start - l.start) < 60000))); },
+  send(type, data) { return new Promise(res => { const id = Math.random().toString(36).slice(2); this.pending[id] = res; parent.postMessage({evx: type, id, ...data}, '*');
+    setTimeout(() => { if (this.pending[id]) { delete this.pending[id]; res(false); } }, 6000); }); }
+};
+addEventListener('message', e => {
+  const m = e.data || {};
+  if (m.evx === 'events') { EVX.evs = (m.events || []).map(x => ({...x, start: new Date(x.start), end: new Date(x.end)})); load(); }
+  if (m.evx === 'reply' && EVX.pending[m.id]) { EVX.pending[m.id](m.ok); delete EVX.pending[m.id]; }
+});
+if (CONFIG.source === 'mr365') parent.postMessage({evx: 'ready'}, '*');
 const API = {
   async list() {
+    if (CONFIG.source === 'mr365') return EVX.events();
     if (CONFIG.source === 'graph') {
       // OUTLOOK: ბექენდი იძახებს Microsoft Graph-ს:
       // GET /users/{room}/calendarView?startDateTime=..&endDateTime=..  (დღევანდელი დღე, თბილისის დრო)
@@ -314,12 +327,20 @@ const API = {
     return mockEvents;
   },
   async create(ev) {
+    if (CONFIG.source === 'mr365') {   // MR365-ის ჩაშენებული "ახლავე დაჯავშნა" (15/30 წთ)
+      if (!await EVX.send('book', {minutes: Math.round((ev.end - ev.start) / MIN)})) throw new Error('book failed');
+      EVX.local.push({...ev, until: Date.now() + 90000}); return;
+    }
     if (CONFIG.source === 'graph') {
       // OUTLOOK: POST /users/{room}/events  (subject, start, end, importance: urgent ? 'high':'normal')
       await fetch(`${CONFIG.apiBase}/events`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({room: CONFIG.room, ...ev})});
     } else mockEvents.push(ev), mockEvents.sort((a,b)=>a.start-b.start);
   },
   async requestIT() {
+    if (CONFIG.itWebhook) {   // მაგ. Power Automate HTTP trigger, რომელიც IT-ს მეილზე წერილს აგზავნის
+      await fetch(CONFIG.itWebhook, {method: 'POST', mode: 'no-cors', headers: {'Content-Type': 'text/plain'}, body: JSON.stringify({room: ROOM.name, email: ROOM.email, to: CONFIG.itEmail, at: new Date().toISOString()})}); return;
+    }
+    if (CONFIG.source === 'mr365') throw new Error('IT webhook is not configured');
     if (CONFIG.source === 'graph') {
       // MAIL: ბექენდი აგზავნის წერილს IT-ის მეილზე (Graph: POST /users/{room}/sendMail) — "ოთახს სჭირდება დახმარება"
       const r = await fetch(`${CONFIG.apiBase}/it-request`, {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -404,8 +425,8 @@ function renderBook() {
   $('#gMinus img').src = `assets/icons/minus-${B.guests > 1 ? 'on' : 'off'}.svg`;
   $('#gPlus img').src = `assets/icons/plus-${B.guests < 50 ? 'on' : 'off'}.svg`;
   $('#bOk').disabled = conflict;
-  $('#warn').textContent = nowBusy && !B.slot ? 'ოთახი ამ დროს დაკავებულია — აირჩიეთ სხვა დრო' : '';
-  renderSlots(nowBusy);
+  $('#warn').textContent = nowBusy && !B.slot ? (CONFIG.canFuture ? 'ოთახი ამ დროს დაკავებულია — აირჩიეთ სხვა დრო' : 'ოთახი ამ დროს დაკავებულია') : '';
+  renderSlots(nowBusy && CONFIG.canFuture);
 }
 
 function tick() {
@@ -455,8 +476,9 @@ function resetForm() {
 $('#bCancel').onclick = () => { resetForm(); go('home'); };   // TODO: დადასტურების ფრეიმი
 $('#bOk').onclick = async () => {
   const {s, e, conflict} = times(); if (conflict) return;
-  await API.create({title: $('#fTitle').value.trim() || 'შეხვედრა', start: s, end: e, author: 'Default ავტორი',
-    kind: 'Room Meeting', urgent: B.status === 'urgent', guests: B.guests});
+  try { await API.create({title: $('#fTitle').value.trim() || 'შეხვედრა', start: s, end: e, author: 'Default ავტორი',
+    kind: 'Room Meeting', urgent: B.status === 'urgent', guests: B.guests}); }
+  catch (err) { console.error(err); return modal('ვერ დაიჯავშნა.<br>სცადეთ თავიდან.', [['გასაგებია']], 117, 186, 295); }
   const mins = Math.round((e - s) / MIN);
   await load(); resetForm(); go('home');
   modal(`ოთახი დაიჯავშნა თქვენ მიერ<br>${mins} წუთით!`, [['გასაგებია']], 117, 186, 295);
